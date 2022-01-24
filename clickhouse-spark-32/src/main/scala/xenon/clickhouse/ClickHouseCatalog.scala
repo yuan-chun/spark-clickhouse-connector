@@ -99,6 +99,7 @@ class ClickHouseCatalog extends TableCatalog with SupportsNamespaces
 
   @throws[NoSuchTableException]
   override def loadTable(ident: Identifier): ClickHouseTable = {
+    log.info(s"ClickHouse loadTable: ${ident.name()}")
     val (database, table) = unwrap(ident) match {
       case None => throw ClickHouseClientException(s"Invalid table identifier: $ident")
       case Some((db, tbl)) => grpcNodeClient.syncQuery(s"SELECT * FROM `$db`.`$tbl` WHERE 1=0") match {

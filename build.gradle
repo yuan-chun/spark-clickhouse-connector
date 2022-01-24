@@ -59,6 +59,7 @@ rat {
 subprojects {
     apply plugin: "idea"
     apply plugin: "scala"
+    apply plugin: "maven-publish"
     apply plugin: "java-library"
     apply plugin: "org.scoverage"
     apply plugin: "com.github.maiflai.scalatest"

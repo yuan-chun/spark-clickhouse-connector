@@ -133,6 +133,7 @@ class GrpcNodeClient(val node: NodeSpec) extends AutoCloseable with Logging {
 
   def syncStreamQuery(sql: String): StreamOutput[Array[JsonNode]] = {
     onExecuteQuery(sql)
+    log.info(s"query sql : $sql")
     val queryInfo = QueryInfo.newBuilder(baseQueryInfo)
       .setQuery(sql)
       .setQueryId(UUID.randomUUID.toString)

@@ -23,6 +23,7 @@ import xenon.clickhouse.ClickHouseAstParser._
 import xenon.clickhouse.expr._
 
 class AstVisitor extends ClickHouseAstBaseVisitor[AnyRef] with Logging {
+
   import ParseUtil._
 
   protected def typedVisit[T](ctx: ParseTree): T =
@@ -112,9 +113,17 @@ class AstVisitor extends ClickHouseAstBaseVisitor[AnyRef] with Logging {
     case fieldCtx: ColumnExprIdentifierContext => visitColumnExprIdentifier(fieldCtx)
     case literalCtx: ColumnExprLiteralContext => visitColumnExprLiteral(literalCtx)
     case funcCtx: ColumnExprFunctionContext => visitColumnExprFunction(funcCtx)
+    case tupleCtx: ColumnExprTupleContext => visitColumnExprTuple(tupleCtx)
     case other: ColumnExprContext => throw new IllegalArgumentException(
-        s"Unsupported ColumnExpr: [${other.getClass.getSimpleName}] ${other.getText}"
-      )
+      s"Unsupported ColumnExpr: [${other.getClass.getSimpleName}] ${other.getText}"
+    )
+  }
+
+  override def visitColumnExprTuple(ctx: ColumnExprTupleContext): TupleExpr = {
+    val exprs = ctx.columnExprList.columnsExpr.asScala.toList.map { col =>
+      FieldRef(Utils.stripSingleQuote(col.getText))
+    }
+    TupleExpr(exprs)
   }
 
   override def visitColumnExprIdentifier(ctx: ColumnExprIdentifierContext): FieldRef =
@@ -162,8 +171,8 @@ class AstVisitor extends ClickHouseAstBaseVisitor[AnyRef] with Logging {
   def visitColumnsExpr(ctx: ColumnsExprContext): Expr = ctx match {
     case field: ColumnsExprColumnContext => visitColumnExpr(field.columnExpr)
     case other: ColumnsExprContext => throw new IllegalArgumentException(
-        s"Unsupported ColumnsExprContext: ${source(other)}"
-      )
+      s"Unsupported ColumnsExprContext: ${source(other)}"
+    )
   }
 
   override def visitSettingsClause(ctx: SettingsClauseContext): Map[String, String] =

@@ -61,6 +61,7 @@ dependencies {
     api "com.fasterxml.jackson.core:jackson-databind:$jackson_version"
     api "com.fasterxml.jackson.module:jackson-module-scala_$scala_binary_version:$jackson_version"
 
+    api "com.google.api.grpc:proto-google-common-protos:$grpc_version"
     api("com.google.guava:guava:$guava_version") {
         // Guava has one dependency that is needed for linkage at runtime: com.google.guava:failureaccess
         exclude group: "com.google.code.findbugs", module: "jsr305"

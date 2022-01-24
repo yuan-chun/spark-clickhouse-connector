@@ -23,9 +23,10 @@ services:
     image: yandex/clickhouse-server:21.8.10.19
     hostname: clickhouse-s1r1
     ports:
-      - 8123
-      - 9000
-      - 9100
+      - "8111:8123"
+      - "9000:9000"
+      - "9009:9009"
+      - "9111:9100"
     volumes:
       - ./config.xml:/etc/clickhouse-server/config.xml
       - ./remote_servers.xml:/etc/clickhouse-server/config.d/remote_servers.xml
@@ -40,9 +41,10 @@ services:
     image: yandex/clickhouse-server:21.8.10.19
     hostname: clickhouse-s1r2
     ports:
-      - 8123
-      - 9000
-      - 9100
+      - "8112:8123"
+      - "9010:9000"
+      - "9019:9009"
+      - "9112:9100"
     volumes:
       - ./config.xml:/etc/clickhouse-server/config.xml
       - ./remote_servers.xml:/etc/clickhouse-server/config.d/remote_servers.xml
@@ -57,9 +59,10 @@ services:
     image: yandex/clickhouse-server:21.8.10.19
     hostname: clickhouse-s2r1
     ports:
-      - 8123
-      - 9000
-      - 9100
+      - "8121:8123"
+      - "9020:9000"
+      - "9029:9009"
+      - "9121:9100"
     volumes:
       - ./config.xml:/etc/clickhouse-server/config.xml
       - ./remote_servers.xml:/etc/clickhouse-server/config.d/remote_servers.xml
@@ -74,9 +77,10 @@ services:
     image: yandex/clickhouse-server:21.8.10.19
     hostname: clickhouse-s2r2
     ports:
-      - 8123
-      - 9000
-      - 9100
+      - "8122:8123"
+      - "9030:9000"
+      - "9039:9009"
+      - "9122:9100"
     volumes:
       - ./config.xml:/etc/clickhouse-server/config.xml
       - ./remote_servers.xml:/etc/clickhouse-server/config.d/remote_servers.xml

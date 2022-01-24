@@ -59,6 +59,13 @@ class ClickHouseReader(
        |WHERE (${scanJob.filterExpr})
        |AND ( ${part.partFilterExpr} )
        |""".stripMargin
+
+//    s"""SELECT
+//       | `create_time`, `m`, `id`, `value`, count(`id`) as uv, count(`m`) as pv
+//       |FROM `default`.`tbl_1`
+//       |WHERE ((1=1) AND (((`id` > 0) AND (`m` > 1)) OR (`value` IS NOT NULL)))
+//       |AND ( 1=1 )
+//       |group by `create_time`, `m`, `id`, `value`""".stripMargin
   )
 
   private var currentRow: Array[JsonNode] = _
