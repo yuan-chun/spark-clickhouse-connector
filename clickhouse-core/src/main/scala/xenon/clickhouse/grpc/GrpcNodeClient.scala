@@ -93,17 +93,32 @@ class GrpcNodeClient(val node: NodeSpec) extends AutoCloseable with Logging {
     executeQuery(queryInfo)
   }
 
+  def syncQueryResult(sql: String): Either[GRPCException, Result] = {
+    onExecuteQuery(sql)
+    val queryInfo = QueryInfo.newBuilder(baseQueryInfo)
+      .setQuery(sql)
+      .setQueryId(UUID.randomUUID.toString)
+      .setOutputFormat("JSONEachRow")
+      .build
+    syncQueryResult(queryInfo)
+  }
+
+  def syncQueryResultAndCheck(sql: String): Result = syncQueryResult(sql) match {
+    case Left(exception) => throw new ClickHouseServerException(exception)
+    case Right(output) => output
+  }
+
   def syncQueryAndCheck(sql: String): SimpleOutput[ObjectNode] = syncQuery(sql) match {
     case Left(exception) => throw new ClickHouseServerException(exception)
     case Right(output) => output
   }
 
   def syncInsert(
-    database: String,
-    table: String,
-    inputFormat: String,
-    data: ByteString
-  ): Either[GRPCException, SimpleOutput[ObjectNode]] = {
+                  database: String,
+                  table: String,
+                  inputFormat: String,
+                  data: ByteString
+                ): Either[GRPCException, SimpleOutput[ObjectNode]] = {
     val sql = s"INSERT INTO `$database`.`$table` FORMAT $inputFormat"
     onExecuteQuery(sql)
     val queryInfo = QueryInfo.newBuilder(baseQueryInfo)
@@ -124,6 +139,14 @@ class GrpcNodeClient(val node: NodeSpec) extends AutoCloseable with Logging {
           .readValues(result.getOutput.newInput())
           .asScala.toSeq
         Right(new JSONEachRowSimpleOutput(records))
+      case result: Result => Left(result.getException)
+    }
+
+  private def syncQueryResult(request: QueryInfo): Either[GRPCException, Result] =
+    Some(blockingStub.executeQuery(request))
+      .map { result => onReceiveResult(result, false); result }
+      .get match {
+      case result: Result if result.getException.getCode == OK.code => Right(result)
       case result: Result => Left(result.getException)
     }
 

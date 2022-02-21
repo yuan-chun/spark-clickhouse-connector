@@ -14,15 +14,18 @@
 
 package xenon.clickhouse
 
+import org.apache.spark.sql.catalyst.SQLConfHelper
+
 import java.time.ZoneId
 import java.util
-
 import scala.collection.JavaConverters._
-
 import org.apache.spark.sql.catalyst.analysis._
+import org.apache.spark.sql.clickhouse.ClickHouseSQLConf.DISTRIBUTED_DDL_ENABLE
 import org.apache.spark.sql.clickhouse.TransformUtils._
 import org.apache.spark.sql.connector.catalog._
 import org.apache.spark.sql.connector.expressions.Transform
+import org.apache.spark.sql.execution.datasources.jdbc.JdbcUtils
+import org.apache.spark.sql.jdbc.{ClickHouseDialect, JdbcDialect, JdbcDialects}
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import xenon.clickhouse.Constants._
@@ -31,10 +34,15 @@ import xenon.clickhouse.exception.ClickHouseErrCode._
 import xenon.clickhouse.grpc.GrpcNodeClient
 import xenon.clickhouse.spec._
 
-class ClickHouseCatalog extends TableCatalog with SupportsNamespaces
-    with ClickHouseHelper with SQLHelper with Logging {
+class ClickHouseCatalog extends TableCatalog
+  with SupportsNamespaces
+  with ClickHouseHelper
+  with SQLHelper
+  with SQLConfHelper
+  with Logging {
 
   private var catalogName: String = _
+  private var dialect: JdbcDialect = _
 
   /////////////////////////////////////////////////////
   //////////////////// SINGLE NODE ////////////////////
@@ -55,6 +63,8 @@ class ClickHouseCatalog extends TableCatalog with SupportsNamespaces
   private var clusterSpecs: Seq[ClusterSpec] = Nil
 
   override def initialize(name: String, options: CaseInsensitiveStringMap): Unit = {
+    JdbcDialects.registerDialect(ClickHouseDialect)
+    this.dialect = JdbcDialects.get(ClickHouseDialect.url)
     this.catalogName = name
     this.nodeSpec = buildNodeSpec(options)
     this.currentDb = nodeSpec.database
@@ -84,16 +94,16 @@ class ClickHouseCatalog extends TableCatalog with SupportsNamespaces
   @throws[NoSuchNamespaceException]
   override def listTables(namespace: Array[String]): Array[Identifier] = namespace match {
     case Array(database) => grpcNodeClient.syncQuery(s"SHOW TABLES IN ${quoted(database)}") match {
-        case Left(exception) if exception.getCode == UNKNOWN_DATABASE.code =>
-          throw new NoSuchDatabaseException(namespace.mkString("."))
-        case Left(exception) =>
-          throw new ClickHouseServerException(exception)
-        case Right(output) =>
-          output.records
-            .map(row => row.get("name").asText)
-            .map(table => Identifier.of(namespace, table))
-            .toArray
-      }
+      case Left(exception) if exception.getCode == UNKNOWN_DATABASE.code =>
+        throw new NoSuchDatabaseException(namespace.mkString("."))
+      case Left(exception) =>
+        throw new ClickHouseServerException(exception)
+      case Right(output) =>
+        output.records
+          .map(row => row.get("name").asText)
+          .map(table => Identifier.of(namespace, table))
+          .toArray
+    }
     case _ => throw new NoSuchDatabaseException(namespace.mkString("."))
   }
 
@@ -102,16 +112,16 @@ class ClickHouseCatalog extends TableCatalog with SupportsNamespaces
     log.info(s"ClickHouse loadTable: ${ident.name()}")
     val (database, table) = unwrap(ident) match {
       case None => throw ClickHouseClientException(s"Invalid table identifier: $ident")
-      case Some((db, tbl)) => grpcNodeClient.syncQuery(s"SELECT * FROM `$db`.`$tbl` WHERE 1=0") match {
-          case Left(exception) if exception.getCode == UNKNOWN_TABLE.code =>
-            throw new NoSuchTableException(ident.toString)
-          // not sure if this check is necessary
-          case Left(exception) if exception.getCode == UNKNOWN_DATABASE.code =>
-            throw new NoSuchDatabaseException(db)
-          case Left(exception) =>
-            throw new ClickHouseServerException(exception)
-          case Right(_) => (db, tbl)
-        }
+      case Some((db, tbl, cluster)) => grpcNodeClient.syncQuery(s"SELECT * FROM `$db`.`$tbl` WHERE 1=0") match {
+        case Left(exception) if exception.getCode == UNKNOWN_TABLE.code =>
+          throw new NoSuchTableException(ident.toString)
+        // not sure if this check is necessary
+        case Left(exception) if exception.getCode == UNKNOWN_DATABASE.code =>
+          throw new NoSuchDatabaseException(db)
+        case Left(exception) =>
+          throw new ClickHouseServerException(exception)
+        case Right(_) => (db, tbl)
+      }
     }
     implicit val _tz: ZoneId = tz.merge
     val tableSpec = queryTableSpec(database, table)
@@ -175,13 +185,13 @@ class ClickHouseCatalog extends TableCatalog with SupportsNamespaces
   @throws[TableAlreadyExistsException]
   @throws[NoSuchNamespaceException]
   override def createTable(
-    ident: Identifier,
-    schema: StructType,
-    partitions: Array[Transform],
-    properties: util.Map[String, String]
-  ): ClickHouseTable = {
+                            ident: Identifier,
+                            schema: StructType,
+                            partitions: Array[Transform],
+                            properties: util.Map[String, String]
+                          ): ClickHouseTable = {
     val (db, tbl) = unwrap(ident) match {
-      case Some((d, t)) => (d, t)
+      case Some((d, t, _)) => (d, t)
       case None => throw ClickHouseClientException(s"Invalid table identifier: $ident")
     }
     val props = properties.asScala
@@ -226,19 +236,31 @@ class ClickHouseCatalog extends TableCatalog with SupportsNamespaces
   }
 
   @throws[NoSuchTableException]
-  override def alterTable(ident: Identifier, changes: TableChange*): ClickHouseTable =
-    throw new UnsupportedOperationException
+  override def alterTable(ident: Identifier, changes: TableChange*): ClickHouseTable = {
+    unwrap(ident, conf.getConf(DISTRIBUTED_DDL_ENABLE)) match {
+      case Some((db, tbl, cluster)) => {
+        for (sql <- dialect.alterTable(s"`${db}`.`${tbl}` ${cluster}", changes, 21)) {
+          grpcNodeClient.syncQuery(sql) match {
+            case Left(exception) => throw new NoSuchTableException(exception.getDisplayText)
+            case Right(_) =>
+          }
+        }
+      }
+      case None =>
+    }
+    loadTable(ident)
+  }
 
-  override def dropTable(ident: Identifier): Boolean = unwrap(ident).exists { case (db, tbl) =>
-    grpcNodeClient.syncQuery(s"DROP TABLE `$db`.`$tbl`").isRight
+  override def dropTable(ident: Identifier): Boolean = unwrap(ident, conf.getConf(DISTRIBUTED_DDL_ENABLE)).exists { case (db, tbl, cluster) =>
+    grpcNodeClient.syncQuery(s"DROP TABLE `$db`.`$tbl` ${cluster}").isRight
   }
 
   @throws[NoSuchTableException]
   @throws[TableAlreadyExistsException]
   override def renameTable(oldIdent: Identifier, newIdent: Identifier): Unit =
-    (unwrap(oldIdent), unwrap(newIdent)) match {
-      case (Some((oldDb, oldTbl)), Some((newDb, newTbl))) =>
-        grpcNodeClient.syncQuery(s"RENAME TABLE `$oldDb`.`$oldTbl` to `$newDb`.`$newTbl`") match {
+    (unwrap(oldIdent, conf.getConf(DISTRIBUTED_DDL_ENABLE)), unwrap(newIdent)) match {
+      case (Some((oldDb, oldTbl, cluster)), Some((newDb, newTbl, _))) =>
+        grpcNodeClient.syncQuery(s"RENAME TABLE `$oldDb`.`$oldTbl` ${cluster} to `$newDb`.`$newTbl`") match {
           case Left(exception) => throw new NoSuchTableException(exception.getDisplayText)
           case Right(_) =>
         }
@@ -270,7 +292,8 @@ class ClickHouseCatalog extends TableCatalog with SupportsNamespaces
 
   @throws[NamespaceAlreadyExistsException]
   override def createNamespace(namespace: Array[String], metadata: util.Map[String, String]): Unit = namespace match {
-    case Array(database) => grpcNodeClient.syncQuery(s"CREATE DATABASE ${quoted(database)}")
+    case Array(database) =>
+      grpcNodeClient.syncQuery(s"CREATE DATABASE ${quoted(database)} ${getCluster}")
   }
 
   @throws[NoSuchNamespaceException]
@@ -278,7 +301,12 @@ class ClickHouseCatalog extends TableCatalog with SupportsNamespaces
 
   @throws[NoSuchNamespaceException]
   override def dropNamespace(namespace: Array[String]): Boolean = namespace match {
-    case Array(database) => grpcNodeClient.syncQuery(s"DROP DATABASE ${quoted(database)}").isRight
+    case Array(database) =>
+      grpcNodeClient.syncQuery(s"DROP DATABASE ${quoted(database)} ${getCluster}").isRight
     case _ => false
+  }
+
+  def getCluster: String = {
+    if (conf.getConf(DISTRIBUTED_DDL_ENABLE)) "ON CLUSTER default" else ""
   }
 }

@@ -16,14 +16,16 @@ package xenon.clickhouse
 
 import java.sql.{Date, Timestamp}
 import java.time.{Instant, LocalDate, ZoneId}
-
 import org.apache.commons.lang3.StringUtils
+import org.apache.spark.annotation.Stable
+import org.apache.spark.sql.connector.expressions.aggregate.{AggregateFunc, Count, CountStar, Max, Min, Sum}
+import org.apache.spark.sql.jdbc.JdbcDialect
 import org.apache.spark.sql.sources._
 import xenon.clickhouse.Utils._
 
 trait SQLHelper {
 
-  def quoted(token: String) = s"`$token`"
+  def quoted(token: String): String = if(token.indexOf("(") > -1) token else s"`$token`"
 
   // null => null, ' => ''
   def escapeSql(value: String): String = StringUtils.replace(value, "'", "''")
@@ -70,4 +72,29 @@ trait SQLHelper {
     filters
       .flatMap(_f => compileFilter(_f)(tz))
       .map(p => s"($p)").mkString(" AND ")
+
+
+  def compileAggregates(aggregates: Seq[AggregateFunc]): Option[Seq[String]] = {
+    Some(aggregates.map {
+      case min: Min =>
+        if (min.column.fieldNames.length != 1) return None
+        s"MIN(${quoted(min.column.fieldNames.head)})"
+      case max: Max =>
+        if (max.column.fieldNames.length != 1) return None
+        s"MAX(${quoted(max.column.fieldNames.head)})"
+      case count: Count =>
+        if (count.column.fieldNames.length != 1) return None
+        val distinct = if (count.isDistinct) "DISTINCT " else ""
+        val column = quoted(count.column.fieldNames.head)
+        s"COUNT($distinct$column)"
+      case sum: Sum =>
+        if (sum.column.fieldNames.length != 1) return None
+        val distinct = if (sum.isDistinct) "DISTINCT " else ""
+        val column = quoted(sum.column.fieldNames.head)
+        s"SUM($distinct$column)"
+      case _: CountStar =>
+        s"COUNT(*)"
+      case _ => return None
+    })
+  }
 }

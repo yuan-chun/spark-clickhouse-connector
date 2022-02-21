@@ -14,12 +14,14 @@
 
 package xenon.clickhouse.read
 
-import java.time.{LocalDate, ZoneOffset, ZonedDateTime}
+import cn.hutool.http.HttpRequest
+import com.alibaba.fastjson.{JSON, JSONObject}
 
+import java.time.{LocalDate, ZoneOffset, ZonedDateTime}
 import scala.collection.JavaConverters._
 import scala.math.BigDecimal.RoundingMode
-
 import com.fasterxml.jackson.databind.JsonNode
+import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Cast, Expression}
 import org.apache.spark.sql.catalyst.{InternalRow, SQLConfHelper}
 import org.apache.spark.sql.catalyst.util.GenericArrayData
 import org.apache.spark.sql.clickhouse.ClickHouseSQLConf._
@@ -31,14 +33,18 @@ import xenon.clickhouse.Utils._
 import xenon.clickhouse.exception.ClickHouseClientException
 import xenon.clickhouse.format.StreamOutput
 import xenon.clickhouse.grpc.{GrpcNodeClient, GrpcNodesClient}
+import xenon.protocol.grpc.Result
+
+import java.util
+import java.util.{HashMap, Map}
 
 class ClickHouseReader(
-  scanJob: ScanJobDescription,
-  part: ClickHouseInputPartition
-) extends PartitionReader[InternalRow]
-    with ClickHouseHelper
-    with SQLConfHelper
-    with Logging {
+                        scanJob: ScanJobDescription,
+                        part: ClickHouseInputPartition,
+                      ) extends PartitionReader[InternalRow]
+  with ClickHouseHelper
+  with SQLConfHelper
+  with Logging {
 
   val readDistributedUseClusterNodes: Boolean = conf.getConf(READ_DISTRIBUTED_USE_CLUSTER_NODES)
   val readDistributedConvertLocal: Boolean = conf.getConf(READ_DISTRIBUTED_CONVERT_LOCAL)
@@ -46,27 +52,53 @@ class ClickHouseReader(
   val database: String = part.table.database
   val table: String = part.table.name
 
+
   def readSchema: StructType = scanJob.readSchema
 
   private lazy val grpcClient: GrpcNodesClient = GrpcNodesClient(part.candidateNodes)
 
   def grpcNodeClient: GrpcNodeClient = grpcClient.node
 
-  lazy val streamOutput: StreamOutput[Array[JsonNode]] = grpcNodeClient.syncStreamQuery(
-    s"""SELECT
-       | ${if (readSchema.isEmpty) 1 else readSchema.map(field => s"`${field.name}`").mkString(", ")}
-       |FROM `$database`.`$table`
-       |WHERE (${scanJob.filterExpr})
-       |AND ( ${part.partFilterExpr} )
-       |""".stripMargin
 
-//    s"""SELECT
-//       | `create_time`, `m`, `id`, `value`, count(`id`) as uv, count(`m`) as pv
-//       |FROM `default`.`tbl_1`
-//       |WHERE ((1=1) AND (((`id` > 0) AND (`m` > 1)) OR (`value` IS NOT NULL)))
-//       |AND ( 1=1 )
-//       |group by `create_time`, `m`, `id`, `value`""".stripMargin
-  )
+  lazy val streamOutput: StreamOutput[Array[JsonNode]] = {
+    val sql = if (table.endsWith("_route")) {
+      val originSql =
+        s"""SELECT
+           | ${if (readSchema.isEmpty) 1 else readSchema.map(field => s"${field.name}").mkString(", ")}
+           |FROM $database.${table.substring(0, table.lastIndexOf("_route"))}
+           |WHERE (${scanJob.filterExpr})
+           |AND ( ${part.partFilterExpr} )
+           |${scanJob.groupByClause}
+           |""".stripMargin
+      val postBody: util.Map[String, Object] = new util.HashMap[String, Object]()
+      postBody.put("originSql", originSql)
+      postBody.put("dimOrMeasure2Project", scanJob.dimOrMeasure2Project)
+      import com.alibaba.fastjson.JSONObject
+      val body = new JSONObject(postBody).toJSONString
+      val httpRes = HttpRequest.post("http://localhost:9095/olap/query/reWriteSql")
+        .header("Content-Type", "application/json")
+        .header("noAuth", "true")
+        .header("noSign", "true")
+        .header("noSecret", "true")
+        .body(body)
+        .timeout(10000)
+        .execute
+        .body
+      val data = JSON.parseObject(httpRes)
+      log.info(s" reWriteSql sql ${data.getString("data")} ")
+      data.getString("data")
+    }
+    else
+      s"""SELECT
+         | ${if (readSchema.isEmpty) 1 else readSchema.map(field => s"${field.name}").mkString(", ")}
+         |FROM $database.${table}
+         |WHERE (${scanJob.filterExpr})
+         |AND ( ${part.partFilterExpr} )
+         |${scanJob.groupByClause}
+         |""".stripMargin
+
+    grpcNodeClient.syncStreamQuery(sql)
+  }
 
   private var currentRow: Array[JsonNode] = _
 
@@ -76,9 +108,12 @@ class ClickHouseReader(
     hasNext
   }
 
-  override def get(): InternalRow = InternalRow.fromSeq(
-    (currentRow zip readSchema).map { case (jsonNode, structField) => decode(jsonNode, structField) }
-  )
+  override def get(): InternalRow = {
+    val array = (currentRow zip readSchema).map { case (jsonNode, structField) => decode(jsonNode, structField) }
+    InternalRow.fromSeq(
+      array
+    )
+  }
 
   private def decode(jsonNode: JsonNode, structField: StructField): Any = {
     if (jsonNode == null || jsonNode.isNull) {
@@ -114,3 +149,11 @@ class ClickHouseReader(
 }
 
 class ClickHouseColumnarReader {}
+
+
+object FactTableExtractor {
+  def unapply(e: String): Option[String] = e match {
+    case a: String if a.endsWith("_route") => Some(a.substring(0, a.lastIndexOf("_route")))
+    case _ => None
+  }
+}

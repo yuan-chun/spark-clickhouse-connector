@@ -15,21 +15,28 @@
 package xenon.clickhouse.read
 
 import java.time.ZoneId
-
 import org.apache.spark.sql.clickhouse.ReadOptions
+import org.apache.spark.sql.sources.Filter
 import org.apache.spark.sql.types.StructType
 import xenon.clickhouse.spec._
 
+import java.util
+
 case class ScanJobDescription(
-  node: NodeSpec,
-  tz: ZoneId,
-  tableSpec: TableSpec,
-  tableEngineSpec: TableEngineSpec,
-  cluster: Option[ClusterSpec],
-  localTableSpec: Option[TableSpec],
-  localTableEngineSpec: Option[TableEngineSpec],
-  readOptions: ReadOptions,
-  // below fields will be constructed in ScanBuilder
-  readSchema: StructType = new StructType,
-  filterExpr: String = "1=1"
-)
+                               node: NodeSpec,
+                               tz: ZoneId,
+                               tableSpec: TableSpec,
+                               tableEngineSpec: TableEngineSpec,
+                               cluster: Option[ClusterSpec],
+                               localTableSpec: Option[TableSpec],
+                               localTableEngineSpec: Option[TableEngineSpec],
+                               readOptions: ReadOptions,
+                               // below fields will be constructed in ScanBuilder
+                               readSchema: StructType = new StructType,
+                               pushedFilters: Array[Filter] = Array(),
+                               pushedAggregateColumn: Array[String] = Array(),
+                               groupByColumns: Option[Array[String]] = None,
+                               filterExpr: String = "1=1",
+                               groupByClause: String = "",
+                               dimOrMeasure2Project: util.HashMap[String, Array[String]] = new util.HashMap()
+                             )

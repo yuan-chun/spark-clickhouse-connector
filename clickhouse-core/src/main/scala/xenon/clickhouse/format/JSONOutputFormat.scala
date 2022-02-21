@@ -61,7 +61,7 @@ class JSONCompactEachRowWithNamesAndTypesStreamOutput(
   private var names: Array[String] = _
   private var types: Array[String] = _
 
-  override lazy val namesAndTypes: ListMap[String, String] = {
+  override val namesAndTypes: ListMap[String, String] = {
     hasNext
     require(names != null && types != null)
     ListMap.empty ++ (names zip types)

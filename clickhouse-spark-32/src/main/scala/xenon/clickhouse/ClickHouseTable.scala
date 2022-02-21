@@ -55,6 +55,8 @@ class ClickHouseTable(
 
   def table: String = spec.name
 
+  def getCluster: Option[ClusterSpec] = cluster
+
   def isDistributed: Boolean = engineSpec.is_distributed
 
   val readDistributedConvertLocal: Boolean = conf.getConf(READ_DISTRIBUTED_CONVERT_LOCAL)

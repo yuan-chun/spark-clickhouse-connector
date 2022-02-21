@@ -26,6 +26,7 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap
 object SparkOptions {
   val READ_DISTRIBUTED_USE_CLUSTER_NODES_KEY: String = "read.distributed.useClusterNodes"
   val READ_DISTRIBUTED_CONVERT_LOCAL_KEY: String = "read.distributed.convertLocal"
+  val READ_PUSH_AGG_KEY: String = "read.pushDownAggregate"
 
   val WRITE_BATCH_SIZE_KEY: String = "write.batchSize"
   val WRITE_MAX_RETRY_KEY: String = "write.maxRetry"
@@ -36,6 +37,7 @@ object SparkOptions {
   val WRITE_DISTRIBUTED_CONVERT_LOCAL_KEY: String = "write.distributed.convertLocal"
 
   val TRUNCATE_DISTRIBUTED_CONVERT_LOCAL_KEY: String = "truncate.distributed.convertLocal"
+  val DISTRIBUTED_DDL_ENABLE_KEY: String = "distributed.ddl.enable"
 }
 
 trait SparkOptions extends SQLConfHelper with Serializable {
@@ -47,13 +49,17 @@ trait SparkOptions extends SQLConfHelper with Serializable {
 
 class ReadOptions(_options: JMap[String, String]) extends SparkOptions {
 
-  override protected def options: CaseInsensitiveStringMap = new CaseInsensitiveStringMap(_options)
+  override def options: CaseInsensitiveStringMap = new CaseInsensitiveStringMap(_options)
 
   def useClusterNodesForDistributed: Boolean =
     eval(READ_DISTRIBUTED_USE_CLUSTER_NODES_KEY, READ_DISTRIBUTED_USE_CLUSTER_NODES)
 
   def convertDistributedToLocal: Boolean =
     eval(READ_DISTRIBUTED_CONVERT_LOCAL_KEY, READ_DISTRIBUTED_CONVERT_LOCAL)
+
+  // true
+  def pushDownAggregate: Boolean =
+    eval(READ_PUSH_AGG_KEY, READ_PUSH_AGG)
 }
 
 class WriteOptions(_options: JMap[String, String]) extends SparkOptions {

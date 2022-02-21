@@ -96,10 +96,24 @@ object ClickHouseSQLConf {
       .booleanConf
       .createWithDefault(true)
 
+  val READ_PUSH_AGG: ConfigEntry[Boolean] =
+    buildConf(READ_PUSH_AGG_KEY)
+      .doc("When agg query, pushDownAggregate to datasource enable")
+      .version("1.0.0")
+      .booleanConf
+      .createWithDefault(false)
+
   val TRUNCATE_DISTRIBUTED_CONVERT_LOCAL: ConfigEntry[Boolean] =
     buildConf(TRUNCATE_DISTRIBUTED_CONVERT_LOCAL_KEY)
       .doc("When truncate Distributed table, truncate local table instead of itself.")
       .version("1.0.0")
       .booleanConf
       .createWithDefault(true)
+
+  val DISTRIBUTED_DDL_ENABLE: ConfigEntry[Boolean] =
+    buildConf(DISTRIBUTED_DDL_ENABLE_KEY)
+      .doc("Distributed ddl enable, alter table .... on cluster default")
+      .version("1.0.0")
+      .booleanConf
+      .createWithDefault(false)
 }

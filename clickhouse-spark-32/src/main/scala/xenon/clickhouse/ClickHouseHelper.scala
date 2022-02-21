@@ -18,13 +18,16 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.node.NullNode
 import org.apache.spark.sql.catalyst.analysis.{NoSuchDatabaseException, NoSuchTableException}
 import org.apache.spark.sql.connector.catalog.Identifier
-import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.jdbc.JdbcDialect
+import org.apache.spark.sql.types.{MetadataBuilder, StructField, StructType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import xenon.clickhouse.Constants._
 import xenon.clickhouse.Utils.dateTimeFmt
+import xenon.clickhouse.format.JSONCompactEachRowWithNamesAndTypesStreamOutput
 import xenon.clickhouse.grpc.GrpcNodeClient
 import xenon.clickhouse.spec._
 
+import java.sql.{ResultSetMetaData, SQLException}
 import java.time.{LocalDateTime, ZoneId}
 import scala.collection.JavaConverters._
 
@@ -36,8 +39,12 @@ trait ClickHouseHelper {
   @volatile lazy val DEFAULT_ACTION_IF_NO_SUCH_TABLE: (String, String) => Unit =
     (database, table) => throw new NoSuchTableException(s"$database.$table")
 
-  def unwrap(ident: Identifier): Option[(String, String)] = ident.namespace() match {
-    case Array(database) => Some((database, ident.name()))
+  def unwrap(ident: Identifier, distributedDDL: Boolean = true): Option[(String, String, String)] = ident.namespace() match {
+    case Array(database) => Some((database, ident.name(), if (distributedDDL) {
+      s"ON CLUSTER default"
+    } else {
+      ""
+    }))
     case _ => None
   }
 
@@ -49,6 +56,24 @@ trait ClickHouseHelper {
     val database = options.getOrDefault(CATALOG_PROP_DATABASE, "default")
     NodeSpec(_host = host, _grpc_port = Some(port), username = user, password = password, database = database)
   }
+
+  def getQueryOutputSchema(aggQuery: String, dialect: JdbcDialect)(implicit grpcNodeClient: GrpcNodeClient): StructType = {
+    val result = grpcNodeClient.syncStreamQuery(
+      aggQuery
+    ).asInstanceOf[JSONCompactEachRowWithNamesAndTypesStreamOutput].namesAndTypes
+
+
+    val fields = new Array[StructField](result.size)
+    result.zipWithIndex.foreach { e => {
+      val metadata = new MetadataBuilder()
+      metadata.putLong("scale", 1)
+      val columnType = dialect.getCatalystType(1, e._1._2, 1, metadata)
+      fields(e._2) = StructField(e._1._1, columnType.get, true, metadata.build())
+    }
+    }
+    new StructType(fields)
+  }
+
 
   def queryClusterSpecs(nodeSpec: NodeSpec)(implicit grpcNodeClient: GrpcNodeClient): Seq[ClusterSpec] = {
     val clustersOutput = grpcNodeClient.syncQueryAndCheck(
@@ -93,9 +118,9 @@ trait ClickHouseHelper {
   }
 
   def queryDatabaseSpec(
-    database: String,
-    actionIfNoSuchDatabase: String => Unit = DEFAULT_ACTION_IF_NO_SUCH_DATABASE
-  )(implicit grpcNodeClient: GrpcNodeClient): DatabaseSpec = {
+                         database: String,
+                         actionIfNoSuchDatabase: String => Unit = DEFAULT_ACTION_IF_NO_SUCH_DATABASE
+                       )(implicit grpcNodeClient: GrpcNodeClient): DatabaseSpec = {
     val output = grpcNodeClient.syncQueryAndCheck(
       s"""SELECT
          |  `name`,          -- String
@@ -121,13 +146,13 @@ trait ClickHouseHelper {
   }
 
   def queryTableSpec(
-    database: String,
-    table: String,
-    actionIfNoSuchTable: (String, String) => Unit = DEFAULT_ACTION_IF_NO_SUCH_TABLE
-  )(implicit
-    grpcNodeClient: GrpcNodeClient,
-    tz: ZoneId
-  ): TableSpec = {
+                      database: String,
+                      table: String,
+                      actionIfNoSuchTable: (String, String) => Unit = DEFAULT_ACTION_IF_NO_SUCH_TABLE
+                    )(implicit
+                      grpcNodeClient: GrpcNodeClient,
+                      tz: ZoneId
+                    ): TableSpec = {
     val tableOutput = grpcNodeClient.syncQueryAndCheck(
       s"""SELECT
          |  `database`,                   -- String
@@ -200,10 +225,10 @@ trait ClickHouseHelper {
   }
 
   def queryTableSchema(
-    database: String,
-    table: String,
-    actionIfNoSuchTable: (String, String) => Unit = DEFAULT_ACTION_IF_NO_SUCH_TABLE
-  )(implicit grpcNodeClient: GrpcNodeClient): StructType = {
+                        database: String,
+                        table: String,
+                        actionIfNoSuchTable: (String, String) => Unit = DEFAULT_ACTION_IF_NO_SUCH_TABLE
+                      )(implicit grpcNodeClient: GrpcNodeClient): StructType = {
     val columnOutput = grpcNodeClient.syncQueryAndCheck(
       s"""SELECT
          |  `database`,                -- String
@@ -238,9 +263,9 @@ trait ClickHouseHelper {
   }
 
   def queryPartitionSpec(
-    database: String,
-    table: String
-  )(implicit grpcNodeClient: GrpcNodeClient): Seq[PartitionSpec] = {
+                          database: String,
+                          table: String
+                        )(implicit grpcNodeClient: GrpcNodeClient): Seq[PartitionSpec] = {
     val partOutput = grpcNodeClient.syncQueryAndCheck(
       s"""SELECT
          |  partition,                           -- String
